@@ -44,7 +44,7 @@ VirtualDisplay::VirtualDisplay(ui::Size* mode, ui::Rotation* state,
 
     sp<IGraphicBufferConsumer> consumer;
     BufferQueue::createBufferQueue(&mProducer, &consumer);
-    mCpuConsumer = new CpuConsumer(consumer, 1);
+    mCpuConsumer = CpuConsumer::create(consumer, 1);
     mCpuConsumer->setName(String8("vds-to-cpu"));
     mCpuConsumer->setDefaultBufferSize(width, height);
     mProducer->setMaxDequeuedBufferCount(4);
