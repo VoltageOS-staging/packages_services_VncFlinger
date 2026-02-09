@@ -383,6 +383,7 @@ status_t InputDevice::start(uint32_t width, uint32_t height, bool istouch, bool 
         ioctl(mFD, UI_SET_ABSBIT, ABS_Y);
         ioctl(mFD, UI_SET_PROPBIT, INPUT_PROP_DIRECT);
     } else {
+        ioctl(mFD, UI_SET_PROPBIT, INPUT_PROP_POINTER);
         // Mouse / Pointer mode
         if (useRelativeInput) {
             ioctl(mFD, UI_SET_EVBIT, EV_REL);

@@ -65,6 +65,7 @@ public class VncFlinger extends Service implements DisplayManager.DisplayListene
 
     private Context mContext;
     public boolean mIsRunning;
+    private VirtualDevice mVirtualDevice;
 
     @SuppressLint("ServiceCast")
     @Override
@@ -160,6 +161,7 @@ public class VncFlinger extends Service implements DisplayManager.DisplayListene
             mDisplay = mDisplayManager.createVirtualDisplay("VNC",
                             mWidth, mHeight, mDPI, null,
                             VIRTUAL_DISPLAY_FLAG_SECURE | VIRTUAL_DISPLAY_FLAG_PUBLIC | VIRTUAL_DISPLAY_FLAG_TRUSTED
+                                    | VIRTUAL_DISPLAY_FLAG_OWN_FOCUS
                                     | VIRTUAL_DISPLAY_FLAG_SUPPORTS_TOUCH
                                     | VIRTUAL_DISPLAY_FLAG_SHOULD_SHOW_SYSTEM_DECORATIONS);
             mDisplayManager.registerDisplayListener(this, null);
