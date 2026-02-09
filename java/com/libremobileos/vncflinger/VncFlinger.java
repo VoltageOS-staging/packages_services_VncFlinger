@@ -4,6 +4,7 @@ import static android.content.ClipDescription.MIMETYPE_TEXT_PLAIN;
 import static android.hardware.display.DisplayManager.*;
 
 import android.annotation.SuppressLint;
+import android.hardware.input.InputManager;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
@@ -39,7 +40,7 @@ public class VncFlinger extends Service implements DisplayManager.DisplayListene
     public boolean mAllowResize = false;
     public boolean mEmulateTouch = false;
     public boolean mUseRelativeInput = false;
-    public boolean mRemoteCursor = true;
+    public boolean mRemoteCursor = false;
     public boolean mSupportClipboard = true;
     public int mWidth = 1280;
     public int mHeight = 720;
@@ -162,6 +163,10 @@ public class VncFlinger extends Service implements DisplayManager.DisplayListene
                                     | VIRTUAL_DISPLAY_FLAG_SUPPORTS_TOUCH
                                     | VIRTUAL_DISPLAY_FLAG_SHOULD_SHOW_SYSTEM_DECORATIONS);
             mDisplayManager.registerDisplayListener(this, null);
+
+            InputManager im = (InputManager) getSystemService(Context.INPUT_SERVICE);
+            im.addUniqueIdAssociationByPort("vnc-input", mDisplay.getDisplay().getUniqueId());
+
         }
         if (mSupportClipboard) {
             mClipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
@@ -281,6 +286,13 @@ public class VncFlinger extends Service implements DisplayManager.DisplayListene
 
     private void cleanup() {
         quit();
+        if (!mMirrorInternal) {
+            InputManager im = (InputManager) getSystemService(Context.INPUT_SERVICE);
+            try {
+                im.removeUniqueIdAssociationByPort("vnc-input");
+            } catch (Exception e) {}
+        }
+
         if (mRemoteCursor)
             ((InputManager) getSystemService(INPUT_SERVICE)).setForceNullCursor(false);
         if (mSupportClipboard && mClipboard != null && mClipListener != null)

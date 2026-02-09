@@ -373,16 +373,34 @@ status_t InputDevice::start(uint32_t width, uint32_t height, bool istouch, bool 
         return NO_INIT;
     }
 
-    const auto options = touch ? kOptions : mOptions;
+    ioctl(mFD, UI_SET_EVBIT, EV_KEY);
+    ioctl(mFD, UI_SET_EVBIT, EV_REP);
+    ioctl(mFD, UI_SET_EVBIT, EV_SYN);
 
-    unsigned int idx = 0;
-    for (idx = 0; idx < (touch ? sizeof(kOptions) : sizeof(mOptions)) / (touch ? sizeof(kOptions[0]) : sizeof(mOptions[0])); idx++) {
-        if (ioctl(mFD, options[idx].cmd, options[idx].bit) < 0) {
-            ALOGE("uinput ioctl failed: %d %d", options[idx].cmd, options[idx].bit);
-            goto err_ioctl;
+    if (touch) {
+        ioctl(mFD, UI_SET_EVBIT, EV_ABS);
+        ioctl(mFD, UI_SET_ABSBIT, ABS_X);
+        ioctl(mFD, UI_SET_ABSBIT, ABS_Y);
+        ioctl(mFD, UI_SET_PROPBIT, INPUT_PROP_DIRECT);
+    } else {
+        // Mouse / Pointer mode
+        if (useRelativeInput) {
+            ioctl(mFD, UI_SET_EVBIT, EV_REL);
+            ioctl(mFD, UI_SET_RELBIT, REL_X);
+            ioctl(mFD, UI_SET_RELBIT, REL_Y);
+            ioctl(mFD, UI_SET_RELBIT, REL_WHEEL);
+        } else {
+            // Absolute Mouse (Touchpad-like behavior without gestures)
+            ioctl(mFD, UI_SET_EVBIT, EV_ABS);
+            ioctl(mFD, UI_SET_ABSBIT, ABS_X);
+            ioctl(mFD, UI_SET_ABSBIT, ABS_Y);
+            // Keep wheel relative even in absolute mode
+            ioctl(mFD, UI_SET_EVBIT, EV_REL);
+            ioctl(mFD, UI_SET_RELBIT, REL_WHEEL);
         }
     }
 
+    unsigned int idx = 0;
     for (idx = 0; idx < KEY_MAX; idx++) {
         if (!touch && idx == BTN_TOUCH)
             continue;
@@ -404,6 +422,10 @@ status_t InputDevice::start(uint32_t width, uint32_t height, bool istouch, bool 
         mUserDev.absmax[ABS_X] = width;
         mUserDev.absmin[ABS_Y] = 0;
         mUserDev.absmax[ABS_Y] = height;
+    }
+
+    if (ioctl(mFD, UI_SET_PHYS, "vnc-input") < 0) {
+        ALOGE("UI_SET_PHYS failed");
     }
 
     if (write(mFD, &mUserDev, sizeof(mUserDev)) != sizeof(mUserDev)) {
