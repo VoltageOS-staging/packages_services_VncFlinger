@@ -6,7 +6,6 @@ cc_library {
         "AndroidPixelBuffer.cpp",
         "AndroidSocket.cpp",
         "InputDevice.cpp",
-        "VirtualDisplay.cpp",
         "main.cpp",
     ],
     cflags: [

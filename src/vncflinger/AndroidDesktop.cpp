@@ -16,7 +16,6 @@
 #include "AndroidDesktop.h"
 #include "AndroidPixelBuffer.h"
 #include "InputDevice.h"
-#include "VirtualDisplay.h"
 
 using namespace vncflinger;
 using namespace android;
@@ -65,7 +64,6 @@ void AndroidDesktop::stop() {
     mServer->setPixelBuffer(0);
     mPixels->reset();
 
-    mVirtualDisplay.clear();
     mPixels.clear();
     mInputDevice->stop();
 
@@ -120,41 +118,17 @@ void AndroidDesktop::processCursor() {
     mServer->setCursor(cur_width, cur_height, rfb::Point(cur_hotX, cur_hotY), cur_buffer);
 }
 
-void AndroidDesktop::processFrames() {
-    if (!frameChanged)
-        return;
-    if (mVirtualDisplay == NULL)
-        return;
-    if (mPixels == NULL)
-        return;
-    frameChanged = false;
-
+void AndroidDesktop::onFrameAvailable(uint8_t* data, int width, int height, int rowStride) {
+    if (mPixels == NULL) return;
     Mutex::Autolock _l(mLock);
 
     updateDisplayInfo();
 
-    // get a frame from the virtual display
-    CpuConsumer::LockedBuffer imgBuffer;
-    status_t res = mVirtualDisplay->getConsumer()->lockNextBuffer(&imgBuffer);
-    if (res != OK) {
-        ALOGE("Failed to lock next buffer: %s (%d)", strerror(-res), res);
-        return;
-    }
-
-    mFrameNumber = imgBuffer.frameNumber;
-    //ALOGV("processFrame: [%" PRIu64 "] format: %x (%dx%d, stride=%d)", mFrameNumber, imgBuffer.format,
-    //      imgBuffer.width, imgBuffer.height, imgBuffer.stride);
-
-    // we don't know if there was a stride change until we get
-    // a buffer from the queue. if it changed, we need to resize
-
-    rfb::Rect bufRect(0, 0, imgBuffer.width, imgBuffer.height);
+    rfb::Rect bufRect(0, 0, width, height);
 
     // performance is extremely bad if the gpu memory is used
     // directly without copying because it is likely uncached
-    mPixels->imageRect(bufRect, imgBuffer.data, imgBuffer.stride);
-
-    mVirtualDisplay->getConsumer()->unlockBuffer(imgBuffer);
+    mPixels->imageRect(bufRect, data, rowStride);
 
     // update clients
     mServer->add_changed(bufRect);
@@ -199,12 +173,7 @@ unsigned int AndroidDesktop::setScreenLayout(int reqWidth, int reqHeight,
     return rfb::resultInvalid;
 }
 
-// cpuconsumer frame listener, called from binder thread
-void AndroidDesktop::onFrameAvailable(const BufferItem& item) {
-    //ALOGV("onFrameAvailable: [%" PRIu64 "] mTimestamp=%" PRId64, item.mFrameNumber, item.mTimestamp);
-    frameChanged = true;
-
-    notify();
+    return rfb::resultInvalid;
 }
 
 void AndroidDesktop::keyEvent(uint32_t keysym, uint32_t /*keycode*/, bool down) {
@@ -233,10 +202,6 @@ void AndroidDesktop::pointerEvent(const rfb::Point& pos, int buttonMask) {
 status_t AndroidDesktop::updateDisplayInfo(bool force) {
     if (mLayerId == 0) {
         std::vector<PhysicalDisplayId> ids = SurfaceComposerClient::getPhysicalDisplayIds();
-        if (ids.empty()) {
-            ALOGE("Failed to get display ID\n");
-            return -1;
-        }
         const auto displayId = ids.front();
         const auto displayToken = SurfaceComposerClient::getPhysicalDisplayToken(displayId);
         if (displayToken == nullptr) {
@@ -305,11 +270,7 @@ void AndroidDesktop::onBufferDimensionsChanged(uint32_t width, uint32_t height) 
     ALOGI("Dimensions changed: old=(%ux%u) new=(%ux%u)", mDisplayRect.getWidth(),
           mDisplayRect.getHeight(), width, height);
 
-    mVirtualDisplay.clear();
-    mVirtualDisplay = new VirtualDisplay(&mDisplayMode,  &mDisplayState,
-                                         mPixels->width(), mPixels->height(), mLayerId, this);
-
-    mDisplayRect = mVirtualDisplay->getDisplayRect();
+    mDisplayRect = Rect(width, height);
 
     reloadInput();
 

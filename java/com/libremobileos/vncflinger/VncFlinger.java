@@ -4,27 +4,29 @@ import static android.content.ClipDescription.MIMETYPE_TEXT_PLAIN;
 import static android.hardware.display.DisplayManager.*;
 
 import android.annotation.SuppressLint;
-import android.app.Notification;
-import android.app.NotificationChannel;
-import android.app.NotificationManager;
-import android.app.PendingIntent;
 import android.app.Service;
+import android.companion.virtual.VirtualDeviceManager;
+import android.companion.virtual.VirtualDeviceManager.VirtualDevice;
+import android.companion.virtual.VirtualDeviceParams;
 import android.content.ClipData;
 import android.content.ClipboardManager;
-import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
+import android.graphics.PixelFormat;
 import android.hardware.display.DisplayManager;
 import android.hardware.display.VirtualDisplay;
+import android.hardware.display.VirtualDisplayConfig;
 import android.hardware.input.ICursorCallback;
 import android.hardware.input.InputManager;
+import android.media.Image;
+import android.media.ImageReader;
 import android.os.IBinder;
 import android.os.RemoteException;
 import android.util.Log;
 import android.view.PointerIcon;
 import android.view.Surface;
 
-import com.libremobileos.vncflinger.IVncFlinger;
+import java.nio.ByteBuffer;
 
 public class VncFlinger extends Service implements DisplayManager.DisplayListener {
 
@@ -49,6 +51,9 @@ public class VncFlinger extends Service implements DisplayManager.DisplayListene
     public String mIntentComponent = null;
 
     public DisplayManager mDisplayManager;
+    public VirtualDeviceManager mVirtualDeviceManager;
+    public VirtualDevice mVirtualDevice;
+    public ImageReader mImageReader;
     public VirtualDisplay mDisplay;
     public ClipboardManager mClipboard;
     public String[] mVNCFlingerArgs;
@@ -156,11 +161,39 @@ public class VncFlinger extends Service implements DisplayManager.DisplayListene
 
         if (!mMirrorInternal) {
             mDisplayManager = (DisplayManager) getSystemService(DISPLAY_SERVICE);
-            mDisplay = mDisplayManager.createVirtualDisplay("VNC",
-                            mWidth, mHeight, mDPI, null,
-                            VIRTUAL_DISPLAY_FLAG_SECURE | VIRTUAL_DISPLAY_FLAG_PUBLIC | VIRTUAL_DISPLAY_FLAG_TRUSTED
-                                    | VIRTUAL_DISPLAY_FLAG_SUPPORTS_TOUCH
-                                    | VIRTUAL_DISPLAY_FLAG_SHOULD_SHOW_SYSTEM_DECORATIONS);
+            mVirtualDeviceManager = getSystemService(VirtualDeviceManager.class);
+
+            VirtualDeviceParams params = new VirtualDeviceParams.Builder().build();
+            // Assuming associationId 1 is valid or bypassed for system apps in VirtualDeviceManagerService
+            mVirtualDevice = mVirtualDeviceManager.createVirtualDevice(1, params);
+
+            mImageReader = ImageReader.newInstance(mWidth, mHeight, PixelFormat.RGBA_8888, 2);
+            mImageReader.setOnImageAvailableListener(reader -> {
+                Image image = reader.acquireLatestImage();
+                if (image != null) {
+                    Image.Plane[] planes = image.getPlanes();
+                    if (planes.length > 0) {
+                        ByteBuffer buffer = planes[0].getBuffer();
+                        int pixelStride = planes[0].getPixelStride();
+                        int rowStride = planes[0].getRowStride() / pixelStride;
+                        sendFrame(buffer, mWidth, mHeight, rowStride);
+                    }
+                    image.close();
+                }
+            }, null);
+
+            VirtualDisplayConfig config = new VirtualDisplayConfig.Builder("VNC", mWidth, mHeight, mDPI)
+                    .setSurface(mImageReader.getSurface())
+                    .setFlags(VIRTUAL_DISPLAY_FLAG_SECURE | VIRTUAL_DISPLAY_FLAG_PUBLIC | VIRTUAL_DISPLAY_FLAG_TRUSTED
+                            | VIRTUAL_DISPLAY_FLAG_SUPPORTS_TOUCH | VIRTUAL_DISPLAY_FLAG_ALWAYS_UNLOCKED 
+                            | VIRTUAL_DISPLAY_FLAG_OWN_DISPLAY_GROUP
+                            | VIRTUAL_DISPLAY_FLAG_SHOULD_SHOW_SYSTEM_DECORATIONS)
+                    .build();
+
+            mDisplay = mVirtualDevice.createVirtualDisplay(config, null, null);
+            if (mDisplay != null) {
+                mVirtualDevice.setShowPointerIcon(true);
+            }
             mDisplayManager.registerDisplayListener(this, null);
         }
         if (mSupportClipboard) {
@@ -182,8 +215,11 @@ public class VncFlinger extends Service implements DisplayManager.DisplayListene
 
                     if (icon == null) {
                         Context content = mContext;
-                        if (!mMirrorInternal)
-                            content = mContext.createDisplayContext(mDisplay.getDisplay());
+                        if (!mMirrorInternal) {
+                            if (mDisplay != null && mDisplay.getDisplay() != null) {
+                                content = mContext.createDisplayContext(mDisplay.getDisplay());
+                            }
+                        }
                         icon = PointerIcon.getLoadedSystemIcon(
                                 content, iconId, /* useLargeIcons */ false,
                                 PointerIcon.DEFAULT_POINTER_SCALE);
@@ -230,8 +266,6 @@ public class VncFlinger extends Service implements DisplayManager.DisplayListene
         if (mDisplay.getDisplay().getDisplayId() != displayId)
             return;
         mDisplayManager.unregisterDisplayListener(this);
-        // dear google, i literally wait till framework tells me
-        // this display is ready so WHY is the delay needed
         try {
             Thread.sleep(500);
         } catch (InterruptedException e) {
@@ -258,7 +292,9 @@ public class VncFlinger extends Service implements DisplayManager.DisplayListene
     private void changeDPI(int dpi) {
         Log.i(LOG_TAG, "Changing DPI from " + mDPI + " to " + dpi);
         mDPI = dpi;
-        mDisplay.resize(mWidth, mHeight, mDPI);
+        if (mDisplay != null) {
+            mDisplay.resize(mWidth, mHeight, mDPI);
+        }
     }
 
     private void resizeResolution(int width, int height, int dpi) {
@@ -267,12 +303,33 @@ public class VncFlinger extends Service implements DisplayManager.DisplayListene
         this.mHeight = height;
         if (dpi != -1)
             mDPI = dpi;
-        mDisplay.resize(width, height, mDPI);
+        if (mDisplay != null) {
+            mDisplay.resize(width, height, mDPI);
+        }
+        if (mImageReader != null) {
+            mImageReader.close();
+        }
+        mImageReader = ImageReader.newInstance(mWidth, mHeight, PixelFormat.RGBA_8888, 2);
+        mImageReader.setOnImageAvailableListener(reader -> {
+            Image image = reader.acquireLatestImage();
+            if (image != null) {
+                Image.Plane[] planes = image.getPlanes();
+                if (planes.length > 0) {
+                    ByteBuffer buffer = planes[0].getBuffer();
+                    int pixelStride = planes[0].getPixelStride();
+                    int rowStride = planes[0].getRowStride() / pixelStride;
+                    sendFrame(buffer, mWidth, mHeight, rowStride);
+                }
+                image.close();
+            }
+        }, null);
+        if (mDisplay != null) {
+            mDisplay.setSurface(mImageReader.getSurface());
+        }
         doSetDisplayProps();
     }
 
     private final IVncFlinger.Stub mBinder = new IVncFlinger.Stub() {
-
         @Override
         public boolean isRunning() throws RemoteException {
             return mIsRunning;
@@ -285,8 +342,20 @@ public class VncFlinger extends Service implements DisplayManager.DisplayListene
             ((InputManager) getSystemService(INPUT_SERVICE)).setForceNullCursor(false);
         if (mSupportClipboard && mClipboard != null && mClipListener != null)
             mClipboard.removePrimaryClipChangedListener(mClipListener);
-        if (mDisplay != null)
+        if (mDisplay != null) {
             mDisplay.release();
+            mDisplay = null;
+        }
+        if (mImageReader != null) {
+            mImageReader.close();
+            mImageReader = null;
+        }
+        if (mVirtualDevice != null) {
+            try {
+                mVirtualDevice.close();
+            } catch (Exception ignored) { }
+            mVirtualDevice = null;
+        }
         if (mHasAudio)
             endAudioStreamer();
         mIsRunning = false;
@@ -320,27 +389,18 @@ public class VncFlinger extends Service implements DisplayManager.DisplayListene
     }
 
     private void doSetDisplayProps() {
+        int rot = 0;
+        if (mDisplay != null && mDisplay.getDisplay() != null) {
+            rot = mDisplay.getDisplay().getRotation() * 90;
+        }
         setDisplayProps(mMirrorInternal ? -1 : mWidth, mMirrorInternal ? -1 : mHeight,
-                mMirrorInternal ? -1 : mDisplay.getDisplay().getRotation() * 90, mMirrorInternal ? 0 : -1,
+                mMirrorInternal ? -1 : rot, mMirrorInternal ? 0 : -1,
                 mEmulateTouch, mUseRelativeInput, mSupportClipboard);
     }
 
     // used from native
     private void onNewSurfaceAvailable() {
         doSetDisplayProps();
-        if (mMirrorInternal)
-            return;
-
-        Log.d(LOG_TAG, "Got new surface");
-        Surface s = getSurface();
-        if (s == null)
-            Log.i(LOG_TAG, "New surface is null");
-        try {
-            mDisplay.setSurface(s);
-        } catch (NullPointerException unused) {
-            // NOTE: if we are unlucky, the method will throw an NPE. checking for mDisplay == null is not enough.
-            Log.w(LOG_TAG, "Failed to set new surface");
-        }
     }
 
     // used from native
@@ -387,7 +447,8 @@ public class VncFlinger extends Service implements DisplayManager.DisplayListene
 
     private native void quit();
 
-    private native Surface getSurface();
+    // Now called explicitly by Java, no need to be called natively so getSurface is gone
+    private native void sendFrame(ByteBuffer data, int width, int height, int rowStride);
 
     private native void notifyServerClipboardChanged();
 

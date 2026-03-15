@@ -20,14 +20,12 @@
 
 #include "AndroidPixelBuffer.h"
 #include "InputDevice.h"
-#include "VirtualDisplay.h"
 
 using namespace android;
 
 namespace vncflinger {
 
 class AndroidDesktop : public rfb::SDesktop,
-                       public CpuConsumer::FrameAvailableListener,
                        public AndroidPixelBuffer::BufferDimensionsListener {
   public:
     AndroidDesktop();
@@ -52,21 +50,18 @@ class AndroidDesktop : public rfb::SDesktop,
     virtual void keyEvent(uint32_t keysym, uint32_t keycode, bool down);
     virtual void pointerEvent(const rfb::Point& pos, int buttonMask);
 
-    virtual void processFrames();
-
     virtual int getEventFd() {
         return mEventFd;
     }
 
     virtual void onBufferDimensionsChanged(uint32_t width, uint32_t height);
 
-    virtual void onFrameAvailable(const BufferItem& item);
+    virtual void onFrameAvailable(uint8_t* data, int width, int height, int rowStride);
 
     virtual void queryConnection(network::Socket* sock, const char* userName);
 
     // Virtual display controller
     int32_t mLayerId = -1;
-    sp<VirtualDisplay> mVirtualDisplay;
     int32_t _width = 1, _height = 1, _rotation = 0;
     bool touch = false, relative = false, clipboard = false, capture = false;
     std::mutex jniConfigMutex;
@@ -91,7 +86,6 @@ class AndroidDesktop : public rfb::SDesktop,
 
     // Pixel buffer
     sp<AndroidPixelBuffer> mPixels = NULL;
-    bool frameChanged = false;
 
     bool clipboardChanged = false;
     bool mInputChanged = false;

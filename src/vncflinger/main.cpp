@@ -140,33 +140,14 @@ extern "C" jint Java_com_libremobileos_vncflinger_VncFlinger_initializeVncFlinge
     return desktopSetup(argc, argv);
 }
 
-extern "C" jobject Java_com_libremobileos_vncflinger_VncFlinger_getSurface(JNIEnv * env,
-                                                                            jobject thiz
-) {
-    if (desktop == NULL) {
-        ALOGV("getSurface: desktop == NULL");
-        return NULL;
+extern "C" void Java_com_libremobileos_vncflinger_VncFlinger_sendFrame(JNIEnv *env, jobject thiz,
+                                                                       jobject buffer, jint width, jint height, jint rowStride) {
+    if (desktop != NULL && buffer != NULL) {
+        uint8_t* data = (uint8_t*)env->GetDirectBufferAddress(buffer);
+        if (data != NULL) {
+            desktop->onFrameAvailable(data, width, height, rowStride);
+        }
     }
-    if (desktop->mVirtualDisplay == NULL){
-        ALOGW("getSurface: mVirtualDisplay == NULL");
-        return NULL;
-    }
-    if (desktop->mVirtualDisplay->getProducer() == NULL){
-        ALOGW("getSurface: getProducer() == NULL");
-        return NULL;
-    }
-    ANativeWindow* w = new Surface(desktop->mVirtualDisplay->getProducer(), true);
-    //Rect dr = desktop->mVirtualDisplay->getDisplayRect();
-    //if we want to bring back window resizing without display resize, we need to scale buffer to dr
-    if (w == NULL) {
-        ALOGE("getSurface: w == NULL");
-        return NULL;
-    }
-    jobject a = ANativeWindow_toSurface(env, w);
-    if (a == NULL) {
-        ALOGE("getSurface: a == NULL");
-    }
-    return a;
 }
 
 extern "C" jint Java_com_libremobileos_vncflinger_VncFlinger_startService(JNIEnv* env, jobject thiz) {
