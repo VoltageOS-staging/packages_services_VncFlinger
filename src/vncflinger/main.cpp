@@ -366,7 +366,6 @@ int startService() {
                 //ALOGV("status=%d eventval=%" PRIu64, status, eventVal);
                 desktop->processCursor();
                 desktop->processInputChanged();
-                desktop->processFrames();
                 desktop->processClipboard();
             }
 

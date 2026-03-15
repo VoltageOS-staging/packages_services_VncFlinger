@@ -173,9 +173,6 @@ unsigned int AndroidDesktop::setScreenLayout(int reqWidth, int reqHeight,
     return rfb::resultInvalid;
 }
 
-    return rfb::resultInvalid;
-}
-
 void AndroidDesktop::keyEvent(uint32_t keysym, uint32_t /*keycode*/, bool down) {
     mInputDevice->keyEvent(down, keysym);
 }

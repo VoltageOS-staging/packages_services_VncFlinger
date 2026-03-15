@@ -26,6 +26,7 @@ using namespace android;
 namespace vncflinger {
 
 class AndroidDesktop : public rfb::SDesktop,
+                       public virtual RefBase,
                        public AndroidPixelBuffer::BufferDimensionsListener {
   public:
     AndroidDesktop();
