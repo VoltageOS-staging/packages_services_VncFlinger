@@ -28,6 +28,8 @@
         tools:ignore="ProtectedPermissions" />
     <uses-permission android:name="android.permission.VIRTUAL_INPUT_DEVICE"
         tools:ignore="ProtectedPermissions" />
+    <uses-permission android:name="android.permission.ASSOCIATE_INPUT_DEVICE_TO_DISPLAY"
+        tools:ignore="ProtectedPermissions" />
 
     <application
         android:supportsRtl="true"

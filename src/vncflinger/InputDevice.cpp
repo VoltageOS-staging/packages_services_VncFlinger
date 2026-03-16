@@ -411,6 +411,10 @@ status_t InputDevice::start(uint32_t width, uint32_t height, bool istouch, bool 
         goto err_ioctl;
     }
 
+    if (ioctl(mFD, UI_SET_PHYS, "vncflinger/input0") < 0) {
+        ALOGE("Failed to set physical port");
+    }
+
     if (ioctl(mFD, UI_DEV_CREATE) == -1) {
         ALOGE("UI_DEV_CREATE failed");
         goto err_ioctl;

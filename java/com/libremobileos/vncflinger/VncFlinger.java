@@ -165,58 +165,6 @@ public class VncFlinger extends Service implements DisplayManager.DisplayListene
 
         if (!mMirrorInternal) {
             mDisplayManager = (DisplayManager) getSystemService(DISPLAY_SERVICE);
-            mVirtualDeviceManager = getSystemService(VirtualDeviceManager.class);
-
-            VirtualDeviceParams params = new VirtualDeviceParams.Builder().build();
-            // VirtualDeviceManagerService requires an associationID from CompanionDeviceManager
-            try {
-                // First try standard API with association ID 0
-                mVirtualDevice = mVirtualDeviceManager.createVirtualDevice(0, params);
-            } catch (IllegalArgumentException e) {
-                Log.w(LOG_TAG, "Failed creating VirtualDevice with ID 0, attempting reflection fallback", e);
-                try {
-                    android.os.IBinder b = android.os.ServiceManager.getService(Context.VIRTUAL_DEVICE_SERVICE);
-                    android.companion.virtual.IVirtualDeviceManager service = android.companion.virtual.IVirtualDeviceManager.Stub.asInterface(b);
-                    
-                    android.companion.virtual.IVirtualDeviceActivityListener activityListener = new android.companion.virtual.IVirtualDeviceActivityListener.Stub() {
-                        @Override public void onTopActivityChanged(int displayId, android.content.ComponentName topActivity, int userId) {}
-                        @Override public void onDisplayEmpty(int displayId) {}
-                    };
-                    
-                    // Since createVirtualDevice has hidden overloads, we use reflection to find the one taking AttributionSource
-                    android.content.AttributionSource attributionSource = mContext.getAttributionSource();
-                    android.os.IBinder token = new android.os.Binder();
-                    
-                    // Try to reflect the hidden method in the service stub proxy itself if accessible
-                    // Instead of full reflection down to createLocalVirtualDevice, let's see if we can use the main createVirtualDevice
-                    // but we can't easily pass 'null' AssociationInfo over AIDL.
-                    // Wait, IVirtualDeviceManager AIDL has:
-                    // IVirtualDevice createVirtualDevice(in IBinder token, in AttributionSource attributionSource, int associationId,
-                    //         in VirtualDeviceParams params, in IVirtualDeviceActivityListener activityListener,
-                    //         in IVirtualDeviceSoundEffectListener soundEffectListener);
-                    // This method STILL takes associationId ! The service throws the error based on it.
-                    // The ONLY way to use createLocalVirtualDevice is if the Service implementation exposes it, but it does not over AIDL!
-                    // So we cannot easily bypass the association ID check remotely via AIDL since the service enforces it.
-                    // We must create an association first!
-                    
-                    Log.d(LOG_TAG, "Calling service via AIDL with ID 0...");
-                    android.companion.virtual.IVirtualDeviceSoundEffectListener soundListener = new android.companion.virtual.IVirtualDeviceSoundEffectListener.Stub() {
-                        @Override public void onPlaySoundEffect(int soundEffect) {}
-                    };
-                    android.companion.virtual.IVirtualDevice ivd = service.createVirtualDevice(
-                            token, attributionSource, 0, params, activityListener, soundListener);
-                            
-                    // We need a wrapper VirtualDevice instance from mContext
-                    // We can use reflection on VirtualDevice constructor
-                    java.lang.reflect.Constructor<VirtualDevice> constructor = VirtualDevice.class.getDeclaredConstructor(
-                            android.companion.virtual.IVirtualDeviceManager.class, Context.class, int.class, VirtualDeviceParams.class);
-                    constructor.setAccessible(true);
-                    mVirtualDevice = constructor.newInstance(service, mContext, 0, params);
-                } catch (Exception ex) {
-                    Log.e(LOG_TAG, "Reflection bypass failed! We may need a real AssociationInfo if this crashes.", ex);
-                    throw new RuntimeException("Failed to bypass CDM Association ID restriction", ex);
-                }
-            }
 
             mImageReader = ImageReader.newInstance(mWidth, mHeight, PixelFormat.RGBA_8888, 2);
             mImageReader.setOnImageAvailableListener(reader -> {
@@ -241,11 +189,28 @@ public class VncFlinger extends Service implements DisplayManager.DisplayListene
                             | VIRTUAL_DISPLAY_FLAG_SHOULD_SHOW_SYSTEM_DECORATIONS)
                     .build();
 
-            mDisplay = mVirtualDevice.createVirtualDisplay(config, null, null);
-            if (mDisplay != null) {
-                mVirtualDevice.setShowPointerIcon(true);
+            // Use DisplayManager directly instead of VirtualDeviceManager to avoid CDM Association ID requirement
+            // DisplayManager's VirtualDisplay API supports VirtualDisplayConfig and all the new flags.
+            mDisplay = mDisplayManager.createVirtualDisplay(config);
+            
+            // To fix the pointer icon bug:
+            // The pointer icon bug happens because the VirtualDisplay flags might need to be set properly,
+            // or we might need to cast DisplayManager or InputManager to setShowPointerIcon.
+            // Wait, VirtualDevice had mVirtualDevice.setShowPointerIcon(true).
+            // InputManager has setPointerIconVisible(true, displayId). Let's use InputManager.
+            try {
+                InputManager im = (InputManager) getSystemService(INPUT_SERVICE);
+                if (mDisplay != null && mDisplay.getDisplay() != null) {
+                    im.setPointerIconVisible(true, mDisplay.getDisplay().getDisplayId());
+                    im.addUniqueIdAssociationByPort("vncflinger/input0", mDisplay.getDisplay().getUniqueId());
+                }
+            } catch (Exception e) {
+                Log.w(LOG_TAG, "Failed to set pointer icon visibility via InputManager", e);
             }
-            mDisplayManager.registerDisplayListener(this, null);
+            
+            if (mDisplay != null) {
+                mDisplayManager.registerDisplayListener(this, null);
+            }
         }
         if (mSupportClipboard) {
             mClipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
@@ -391,6 +356,12 @@ public class VncFlinger extends Service implements DisplayManager.DisplayListene
         quit();
         if (mRemoteCursor)
             ((InputManager) getSystemService(INPUT_SERVICE)).setForceNullCursor(false);
+        try {
+            InputManager im = (InputManager) getSystemService(INPUT_SERVICE);
+            im.removeUniqueIdAssociationByPort("vncflinger/input0");
+        } catch (Exception e) {
+            Log.w(LOG_TAG, "Failed to remove InputManager display association", e);
+        }
         if (mSupportClipboard && mClipboard != null && mClipListener != null)
             mClipboard.removePrimaryClipChangedListener(mClipListener);
         if (mDisplay != null) {
