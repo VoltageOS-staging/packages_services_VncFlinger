@@ -1,5 +1,6 @@
 <permissions>
     <privapp-permissions package="com.libremobileos.vncflinger">
         <permission name="android.permission.CAPTURE_AUDIO_OUTPUT"/>
+        <permission name="android.permission.ASSOCIATE_INPUT_DEVICE_TO_DISPLAY"/>
     </privapp-permissions>
 </permissions>

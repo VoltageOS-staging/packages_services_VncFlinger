@@ -4,6 +4,7 @@ import static android.content.ClipDescription.MIMETYPE_TEXT_PLAIN;
 import static android.hardware.display.DisplayManager.*;
 
 import android.annotation.SuppressLint;
+import android.view.InputDevice;
 import android.app.Service;
 import android.companion.virtual.IVirtualDevice;
 import android.companion.virtual.IVirtualDeviceActivityListener;
@@ -64,6 +65,7 @@ public class VncFlinger extends Service implements DisplayManager.DisplayListene
     public String[] mAudioStreamerArgs;
     public PointerIcon mOldPointerIcon;
     public int mOldPointerIconId;
+    public String mInputDeviceDescriptor;
     public ClipboardManager.OnPrimaryClipChangedListener mClipListener = () -> {
         if (mSupportClipboard && mClipboard.hasPrimaryClip()
                 && mClipboard.getPrimaryClipDescription().hasMimeType(MIMETYPE_TEXT_PLAIN)) {
@@ -193,20 +195,8 @@ public class VncFlinger extends Service implements DisplayManager.DisplayListene
             // DisplayManager's VirtualDisplay API supports VirtualDisplayConfig and all the new flags.
             mDisplay = mDisplayManager.createVirtualDisplay(config);
             
-            // To fix the pointer icon bug:
-            // The pointer icon bug happens because the VirtualDisplay flags might need to be set properly,
-            // or we might need to cast DisplayManager or InputManager to setShowPointerIcon.
-            // Wait, VirtualDevice had mVirtualDevice.setShowPointerIcon(true).
-            // InputManager has setPointerIconVisible(true, displayId). Let's use InputManager.
-            try {
-                InputManager im = (InputManager) getSystemService(INPUT_SERVICE);
-                if (mDisplay != null && mDisplay.getDisplay() != null) {
-                    im.setPointerIconVisible(true, mDisplay.getDisplay().getDisplayId());
-                    im.addUniqueIdAssociationByPort("vncflinger/input0", mDisplay.getDisplay().getUniqueId());
-                }
-            } catch (Exception e) {
-                Log.w(LOG_TAG, "Failed to set pointer icon visibility via InputManager", e);
-            }
+            // Associate input device with the VNC display (initial call before device exists)
+            associateInputWithDisplay();
             
             if (mDisplay != null) {
                 mDisplayManager.registerDisplayListener(this, null);
@@ -288,6 +278,12 @@ public class VncFlinger extends Service implements DisplayManager.DisplayListene
             e.printStackTrace();
         }
         notifyDisplayReady();
+        // Re-associate after input device is recreated by notifyDisplayReady.
+        // Delay to allow InputReader to detect the new uinput device.
+        new Thread(() -> {
+            try { Thread.sleep(1500); } catch (InterruptedException ignored) {}
+            associateInputWithDisplay();
+        }).start();
     }
 
     @Override
@@ -343,6 +339,11 @@ public class VncFlinger extends Service implements DisplayManager.DisplayListene
             mDisplay.setSurface(mImageReader.getSurface());
         }
         doSetDisplayProps();
+        // Re-associate after resize causes input device recreation.
+        new Thread(() -> {
+            try { Thread.sleep(1500); } catch (InterruptedException ignored) {}
+            associateInputWithDisplay();
+        }).start();
     }
 
     private final IVncFlinger.Stub mBinder = new IVncFlinger.Stub() {
@@ -359,6 +360,10 @@ public class VncFlinger extends Service implements DisplayManager.DisplayListene
         try {
             InputManager im = (InputManager) getSystemService(INPUT_SERVICE);
             im.removeUniqueIdAssociationByPort("vncflinger/input0");
+            if (mInputDeviceDescriptor != null) {
+                im.removeUniqueIdAssociationByDescriptor(mInputDeviceDescriptor);
+                mInputDeviceDescriptor = null;
+            }
         } catch (Exception e) {
             Log.w(LOG_TAG, "Failed to remove InputManager display association", e);
         }
@@ -418,6 +423,41 @@ public class VncFlinger extends Service implements DisplayManager.DisplayListene
         setDisplayProps(mMirrorInternal ? -1 : mWidth, mMirrorInternal ? -1 : mHeight,
                 mMirrorInternal ? -1 : rot, mMirrorInternal ? 0 : -1,
                 mEmulateTouch, mUseRelativeInput, mSupportClipboard);
+    }
+
+    private void associateInputWithDisplay() {
+        if (mDisplay == null || mDisplay.getDisplay() == null) return;
+        try {
+            InputManager im = (InputManager) getSystemService(INPUT_SERVICE);
+            int displayId = mDisplay.getDisplay().getDisplayId();
+            String uniqueId = mDisplay.getDisplay().getUniqueId();
+            Log.i(LOG_TAG, "associateInputWithDisplay: displayId=" + displayId + " uniqueId=" + uniqueId);
+
+            // Method 1: Port-based association (matches EVIOCGPHYS from uinput)
+            im.addUniqueIdAssociationByPort("vncflinger/input0", uniqueId);
+            Log.i(LOG_TAG, "associateInputWithDisplay: added port association");
+
+            // Method 2: Descriptor-based association (more reliable, doesn't depend on UI_SET_PHYS)
+            // Find the VNC-RemoteInput device by name and get its descriptor
+            int[] deviceIds = im.getInputDeviceIds();
+            for (int devId : deviceIds) {
+                InputDevice device = im.getInputDevice(devId);
+                if (device != null && "VNC-RemoteInput".equals(device.getName())) {
+                    String descriptor = device.getDescriptor();
+                    Log.i(LOG_TAG, "associateInputWithDisplay: found VNC-RemoteInput descriptor=" + descriptor);
+                    im.addUniqueIdAssociationByDescriptor(descriptor, uniqueId);
+                    mInputDeviceDescriptor = descriptor;
+                    Log.i(LOG_TAG, "associateInputWithDisplay: added descriptor association");
+                    break;
+                }
+            }
+
+            // Ensure pointer cursor is visible on the VNC display
+            im.setPointerIconVisible(true, displayId);
+            Log.i(LOG_TAG, "associateInputWithDisplay: set pointer visible on display " + displayId);
+        } catch (Exception e) {
+            Log.w(LOG_TAG, "associateInputWithDisplay failed", e);
+        }
     }
 
     // used from native
